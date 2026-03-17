@@ -1,7 +1,9 @@
+import os
+
 from .claude import AsyncClaudeAgent
 from .gemini import AsyncGeminiAgent
 from .gpt import GPT3BaseAgent, AsyncConversationalGPTBaseAgent
-from .huggingface import ZephyrAgent
+from .huggingface import ZephyrAgent, LocalHuggingFaceChatAgent
 from .together_ai import AsyncTogetherAIAgent, AsyncLlama3Agent
 
 def load_model(model_name, **kwargs):
@@ -19,6 +21,9 @@ def load_model(model_name, **kwargs):
         model = AsyncTogetherAIAgent({'model': model_name.removesuffix("-tg"), 'temperature': 0, 'max_tokens': 128, **kwargs})
     elif model_name.startswith('zephyr'):
         model = ZephyrAgent(**kwargs)
+    elif os.path.exists(model_name):
+        # Local HF model directory (e.g., a downloaded Qwen2/Llama Instruct).
+        model = LocalHuggingFaceChatAgent(model_name, **kwargs)
     else:
         raise NotImplementedError
 

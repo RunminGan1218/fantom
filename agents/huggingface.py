@@ -1,3 +1,4 @@
+import os
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 from .base import BaseAgent
@@ -35,21 +36,21 @@ class HuggingFaceAgent(BaseAgent):
         responses = [self.postprocess_output(decoded_output) for decoded_output in decoded_outputs]
         return responses
 
-    def raw_batch_interact(self, texts, do_sample=True):
+    def raw_batch_interact(self, texts, do_sample=False):
         encoded_texts = self.encode(texts)
         with torch.no_grad():
             outputs = self.model.generate(**encoded_texts, max_new_tokens=365, do_sample=do_sample)
         responses = self.decode(outputs)
         return responses
 
-    def batch_interact(self, texts, do_sample=True):
+    def batch_interact(self, texts, do_sample=False):
         prompts = [self.preprocess_input(text) for text in texts] # XXX: apply those chat-specific templates beforehand and make them into pipeline batch and directly feed the pipeline
-        outputs = self.pipe(prompts, return_full_text=False, max_new_tokens=365, do_sample=True)
+        outputs = self.pipe(prompts, return_full_text=False, max_new_tokens=365, do_sample=do_sample)
         responses = [self.postprocess_pipeline_output(output) for output in outputs]
 
         return responses
 
-    def interact(self, text, do_sample=True):
+    def interact(self, text, do_sample=False):
         return self.batch_interact([text], do_sample)[0]
 
     def batch_compute_likelihood(self, input_texts, target_data):
@@ -170,3 +171,45 @@ class GemmaInstructAgent(HuggingFaceChatAgent):
                                                           torch_dtype=torch.float16, attn_implementation="flash_attention_2")
         self.model_output_token = "\nmodel\n"
         self.init_pipeline()
+
+
+class LocalHuggingFaceChatAgent(HuggingFaceChatAgent):
+    """
+    Load a chat/instruct model from a local directory (already downloaded from HF).
+
+    Usage:
+      --model /home/ganrunmin/models/qwen2_1_5b_instruct
+    """
+    def __init__(
+        self,
+        model_path: str,
+        *,
+        torch_dtype: str | None = "auto",
+        trust_remote_code: bool = True,
+        batch_size: int = 8,
+    ):
+        super().__init__()
+        self.batch_size = batch_size
+
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Local model path not found: {model_path}")
+
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_path,
+            padding_side="left",
+            trust_remote_code=trust_remote_code,
+        )
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_path,
+            device_map="auto",
+            torch_dtype=torch_dtype,
+            trust_remote_code=trust_remote_code,
+        )
+
+        # Many decoder-only LMs (incl. Qwen/Llama) don't define a pad token.
+        if getattr(self.tokenizer, "pad_token", None) is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        self.init_pipeline()
+        if getattr(self.model.config, "eos_token_id", None) is not None:
+            self.pipe.tokenizer.pad_token_id = self.model.config.eos_token_id
